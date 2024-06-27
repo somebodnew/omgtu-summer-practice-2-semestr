@@ -2,27 +2,34 @@
 
 {"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
 
+#!markdown
+
+# Определенный интеграл через потоки
+
 #!csharp
 
 using System;
 using System.Threading;
+using System.Diagnostics;
 
 class DefiniteIntegral
 {
+    public static Stopwatch stopWatch = new Stopwatch();
     private static double finalRes;
     private static Barrier barrier;
 
     public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
     {
+        stopWatch.Restart();
         finalRes = 0.0;
-        var detailSteps = step / 3; 
+        double detailSteps = step / 10;
         barrier = new Barrier(threadsnumber);
         var threads = new Thread[threadsnumber];
         
 
         for (int i = 0; i < threadsnumber; i++)
         {
-            var threadIndex = i;
+            int threadIndex = i;
             threads[i] = new Thread(() =>
             {
                 var lres = LocalResult(a, b, function, detailSteps, threadsnumber, threadIndex);
@@ -32,7 +39,12 @@ class DefiniteIntegral
             threads[i].Start();
         }
         foreach (Thread thread in threads) thread.Join();
-
+        stopWatch.Stop();
+        TimeSpan ts = stopWatch.Elapsed;
+        string elapsedTime = String.Format("{0:00}:{1:00}:{2:00}.{3:00}",
+            ts.Hours, ts.Minutes, ts.Seconds,
+            ts.Milliseconds / 10);
+        //Console.WriteLine("RunTime " + elapsedTime);
         return finalRes;
     }
 
@@ -60,6 +72,111 @@ class DefiniteIntegral
     }
 }
 
+#!markdown
+
+# Определенный интеграл без потоков
+
+#!csharp
+
+using System;
+using System.Diagnostics;
+
+class DefiniteIntegralNoThread
+{
+    public static Stopwatch stopWatch = new Stopwatch();
+    private static double finalRes;
+    
+
+    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+    {
+        stopWatch.Restart();
+        finalRes = 0.0;
+        double detailSteps = step / 10;
+        
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            int threadIndex = i;
+            var lres = LocalResult(a, b, function, detailSteps, threadsnumber, threadIndex);            
+            finalRes += lres;
+        }
+        
+        stopWatch.Stop();
+        TimeSpan ts = stopWatch.Elapsed;
+        string elapsedTime = String.Format("{0:00}:{1:00}:{2:00}.{3:00}",
+            ts.Hours, ts.Minutes, ts.Seconds,
+            ts.Milliseconds / 10);
+        //Console.WriteLine("RunTime " + elapsedTime);
+        return finalRes;
+    }
+
+    public static double LocalResult(double a, double b, Func<double, double> function, double step, int threadsnumber, int thread)
+    {
+        double localA = a + thread * (b - a) / threadsnumber;
+        double localB = localA + (b - a) / threadsnumber;
+        double localResult = 0.0;
+
+        for (double x = localA; x < localB; x += step) localResult += (function(x) + function(x + step)) * step / 2.0;
+
+        if (localB > b - step) localResult += (function(b - step) + function(b)) * step / 2.0;
+
+        return localResult;
+    }
+    
+}
+
+#!markdown
+
+## Время выполнения и т.д.
+
+#!csharp
+
+#r "nuget: xunit, 2.8.1"
+#r "nuget:ScottPlot, 5.0.35"
+
+using Xunit;
+using Microsoft.DotNet.Interactive.Formatting;
+
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(600, 600)), HtmlFormatter.MimeType);
+
+var N = 11;
+var SIN = (double x) => Math.Sin(x);
+var dataX = new double[N];
+var dataY = new double[N];
+var optimal = Double.MaxValue;
+var optIndex = 0;
+for (int i = 1; i < N; i++) 
+{
+    for (int j = 0; j < 16; j++)
+    {
+        var curIntegral = DefiniteIntegral.Solve(-100, 100, SIN, 1e-3, i);
+        dataX[i] += DefiniteIntegral.stopWatch.ElapsedMilliseconds;
+        Assert.Equal(0, curIntegral, 1e-4);
+    }
+    dataX[i]/= 10;
+    dataY[i] = i;
+    if (dataX[i] < optimal)
+    {
+        optimal = dataX[i];
+        optIndex = i;
+    }
+}
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataX, dataY);
+Console.WriteLine($"Optimal time is {optimal} with {optIndex} threads");
+var curIntegral = DefiniteIntegralNoThread.Solve(-100, 100, SIN, 1e-3, 4);
+Assert.Equal(0, curIntegral, 1e-4);
+var worktime = Convert.ToDouble(DefiniteIntegralNoThread.stopWatch.ElapsedMilliseconds);
+var percent = (worktime - optimal)/worktime;
+Console.WriteLine($"Program without threads finished in {worktime}");
+Console.WriteLine($"Difference in time between programs is {worktime - optimal}, which means the one using threads is {percent:P0} faster than the other");
+plt
+
+#!markdown
+
+## Тесты
+
 #!csharp
 
 #r "nuget: xunit, 2.8.1"
@@ -74,3 +191,13 @@ Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
 
 Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
+
+#!markdown
+
+# Summary
+
+#!csharp
+
+Console.WriteLine("Шаг - 1e-3");
+Console.WriteLine($"Оптимальное число потоков - {optIndex}");
+Console.WriteLine($"Время работы - {optimal}, т.е. на {percent:P0} быстрее однопоточной программы");
