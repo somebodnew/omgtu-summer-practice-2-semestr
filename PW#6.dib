@@ -1,0 +1,179 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
+
+#!markdown
+
+# Практическая работа №6. Изучение производительности потоко-безопасных очередей.
+
+#!csharp
+
+#r "nuget:ScottPlot, 5.0.35"
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Diagnostics;
+using Microsoft.DotNet.Interactive.Formatting;
+
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(600, 800)), HtmlFormatter.MimeType);
+
+#!markdown
+
+## Без потоков
+
+#!csharp
+
+var NonSafeStopwatch = new Stopwatch();
+var NonSafeTicks = new List<long>();
+
+for(int j = 0; j < 10; j++)
+{
+    var NonSafeQueue = new Queue<int>();
+    NonSafeStopwatch.Restart();
+    for (int i = 0; i < 1000000; i++)
+    {
+        NonSafeQueue.Enqueue(i);
+    }
+
+    while (NonSafeQueue.Count > 0)
+    {
+        NonSafeQueue.Dequeue();
+    }
+
+    NonSafeStopwatch.Stop();
+    NonSafeTicks.Add(NonSafeStopwatch.ElapsedTicks);
+}
+
+Console.WriteLine(NonSafeTicks.Average() + " " + NonSafeTicks.Min());
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(Enumerable.Range(1, 10).ToArray(), NonSafeTicks.ToArray());
+
+plt
+
+#!markdown
+
+## С помощью ConcurrentQueue
+
+#!csharp
+
+var ConcurrentStopWatch = new Stopwatch();
+var EventConcurrentHandler = new ManualResetEvent(false);
+var ConcurrentTicks = new List<long>();
+
+for(int k = 0; k < 10; k++)
+{
+
+    var ConcurrentQ = new ConcurrentQueue<int>();
+
+    var ThreadConcurrentWrite = new Thread(()=>
+    {
+        EventConcurrentHandler.WaitOne();
+        ConcurrentStopWatch.Start();
+        for(int i = 0; i < 1000000; i++)
+        {
+            ConcurrentQ.Enqueue(i);
+        }
+    });
+
+    var ThreadConcurrentRead = new Thread(()=>
+    {
+        EventConcurrentHandler.Set();
+        int deleted;
+        while(ConcurrentQ.TryDequeue(out deleted));        
+        ConcurrentStopWatch.Stop();
+    });
+
+    ThreadConcurrentWrite.Start();
+    ThreadConcurrentRead.Start();
+
+    ThreadConcurrentWrite.Join();
+    ThreadConcurrentRead.Join();
+
+    ConcurrentTicks.Add(ConcurrentStopWatch.ElapsedTicks);
+    ConcurrentStopWatch.Reset();
+    EventConcurrentHandler.Reset();
+}
+
+Console.WriteLine(ConcurrentTicks.Average() + " " + ConcurrentTicks.Min());
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(Enumerable.Range(1, 10).ToArray(), ConcurrentTicks.ToArray());
+
+plt
+
+#!markdown
+
+## С помощью BlockingCollection
+
+#!csharp
+
+var BlockingStopWatch = new Stopwatch();
+var EventBlockingHandler = new ManualResetEvent(false);
+var BlockingTicks = new List<long>();
+
+for(int k = 0; k < 10; k++)
+{
+    var BlockC = new BlockingCollection<int>();
+    var ThreadBlockWrite = new Thread(() =>
+    {
+        EventBlockingHandler.WaitOne();
+        BlockingStopWatch.Start();
+        for (int i = 0; i < 1000000; i++) BlockC.Add(i);
+        BlockC.CompleteAdding();
+    });
+
+    var ThreadBlockRead = new Thread(() =>
+    {
+        EventBlockingHandler.Set();
+        foreach (var item in BlockC.GetConsumingEnumerable());
+        BlockingStopWatch.Stop();
+    });
+
+    ThreadBlockWrite.Start();
+    ThreadBlockRead.Start();
+
+    ThreadBlockWrite.Join();
+    ThreadBlockRead.Join();
+
+    BlockingTicks.Add(BlockingStopWatch.ElapsedTicks);
+    BlockingStopWatch.Reset();
+    EventBlockingHandler.Reset();
+}
+
+Console.WriteLine(BlockingTicks.Average() + " " + BlockingTicks.Min());
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(Enumerable.Range(1, 10).ToArray(), BlockingTicks.ToArray());
+
+plt
+
+#!markdown
+
+## Вывод
+
+#!markdown
+
+### Непотокобезопасная очередь:
+
+Ср. тики: 281833.4
+Мин. тики: 217198
+
+### ConcurrentQueue:
+
+Ср. тики: 229194.3 
+Мин. тики: 163465
+
+### BlockingCollection:
+
+Ср. тики: 4105916.5 
+Мин. тики: 3404861
+
+
+Таким образом, по средним и минимальным тикам ConcurrentQueue является самой эффективной среди представленных. 
+
+Эффективность ConcurrentQueue относительно непотокобезопасной очереди(считается относительно средних тиков): ~22.967%
