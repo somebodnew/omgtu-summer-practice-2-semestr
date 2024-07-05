@@ -6,14 +6,13 @@
 
 # Практическая работа №7.Реализация потока обработки команад.
 
-**Цель:** Реализовать основу для многопоточного сервера приложений.
+#!csharp
 
-**Результаты:** После выполнения работы Вы сможете:
-1. Обрабатывать множество операций в несколько потоков.
-2. Останавливать потоки по запросу извне.
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
 
-## Задание.
-Пусть операция задана интерфейсом
+public static bool isSoftStopRequested = false;
 
 #!csharp
 
@@ -22,19 +21,137 @@ public interface ICommand
     void Execute();
 }
 
-#!markdown
+#!csharp
 
-Классы, наследующие интерйес ICommand будем называть **Командами.**
+public class HardStop : ICommand
+{
+    private Thread stoppingThread;
 
-Реализовать класс ServerThread и команды по hard и soft завершению потока. 
+    public HardStop(Thread stoppingThread)
+    {
+        this.stoppingThread = stoppingThread;
+    }
 
-ServerThread может менять свое поведение для обработки следующей Команды.
-Исключение, выброшенное из Команды, перехватывается и передается вместе с самой Командой в ExceptionHandler (см. ЛР №5) Примечание. Наличие реализованного обработчика исключений не обязательно для выполнения данной задачи. 
+    public void Execute()
+    {
+        if (stoppingThread != Thread.CurrentThread)
+        {
+            throw new Exception("HardStop cannot be executed in non-target thread");
+        }
+        stoppingThread.Interrupt();
+    }
+}
 
-Команда HardStop приводит к немедленной остановке потока, несмотря на, что в очереди потока есть еще Команды.
-Команда  SoftStop останавливает поток, когда в очереди потока закончатся все Команды.
+#!csharp
 
-Команды HardStop и SoftStop успешно выполняются только в потоке, который они должны остановить, в противном случае выбрасывают исключение.
-Отсутствие Команд в очереди потока не должно требовать значительных затрат процессорного времени. Значительными считаются затраты, которые зависят от времени простоя потока.
+public class SoftStop : ICommand
+{
+    private BlockingCollection<ICommand> commandQueue;
+    private Thread stoppingThread;
 
-Написать проверку, которая гарантирует правильное выполнение команд HardStop и SoftStop.
+    public SoftStop(BlockingCollection<ICommand> commandQueue, Thread stoppingThread)
+    {
+        this.commandQueue = commandQueue;
+        this.stoppingThread = stoppingThread;
+    }
+
+    public void Execute()
+    {
+        if (stoppingThread != Thread.CurrentThread)
+        {
+            throw new Exception("SoftStop cannot be executed in non-target thread");
+        }
+
+        if(isSoftStopRequested){
+        while (commandQueue.Count > 0)
+            {
+                ICommand command = commandQueue.Take();
+                command.Execute();
+            }
+        }
+    }
+}
+
+#!csharp
+
+public static class ExceptionHandler
+{
+    public static void Handle(Exception exception, ICommand command){
+        Console.WriteLine("Exception " + exception + " caught while trying to execute next command: " + command.GetType().Name);
+    }
+}
+
+#!csharp
+
+public class ServerThread
+{
+    public BlockingCollection<ICommand> commandQueue = new BlockingCollection<ICommand>();
+
+    public Thread mainThread;
+
+    public ServerThread()
+    {
+        mainThread = new Thread(Run);
+        mainThread.Start();
+    }
+
+    public void Run()
+    {
+
+        while ((commandQueue.Count > 0) && (!isSoftStopRequested))
+        {
+            ICommand command = commandQueue.Take();
+            try
+            {
+                if(command is SoftStop)
+                {
+                    isSoftStopRequested = true;
+                    break;
+                } 
+                else if (command is HardStop) break;
+                command.Execute();
+                
+            }
+            catch (Exception exception)
+            {
+                ExceptionHandler.Handle(exception, command);
+            }
+        }
+        
+    }
+
+    public void AddCommand(ICommand command)
+    {
+        commandQueue.Add(command);
+    }
+}
+
+#!csharp
+
+public class TestCommand : ICommand
+{
+    public void Execute()
+    {
+        Console.WriteLine("Server testing...");
+    }
+}
+
+#!csharp
+
+ServerThread serverThread = new ServerThread();
+
+serverThread.AddCommand(new TestCommand());
+serverThread.AddCommand(new TestCommand());
+
+try
+{
+    serverThread.AddCommand(new HardStop(serverThread.mainThread));
+}
+catch(Exception exception)
+{
+    Console.WriteLine(exception.Message);
+}
+
+serverThread.AddCommand(new TestCommand());
+
+serverThread.mainThread.Join();
